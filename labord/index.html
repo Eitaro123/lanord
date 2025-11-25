@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 検索エンジンにインデックスさせない設定 -->
+    <meta name="robots" content="noindex, nofollow">
+    <title>研究室 在席管理ボード (Online)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Cropper.js (画像トリミング用) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f1f5f9; color: #1e293b; }
+        
+        /* ステータス別のカラー定義 */
+        .status-present-bg { background-color: #dcfce7; color: #166534; border-left-color: #22c55e; }
+        .status-experiment-bg { background-color: #fef9c3; color: #854d0e; border-left-color: #eab308; }
+        .status-class-bg { background-color: #dbeafe; color: #1e40af; border-left-color: #3b82f6; }
+        .status-meeting-bg { background-color: #f3e8ff; color: #6b21a8; border-left-color: #a855f7; }
+        .status-absent-bg { background-color: #f8fafc; color: #64748b; border-left-color: #94a3b8; }
+
+        /* --- 3Dフリップアニメーション --- */
+        .flip-container {
+            perspective: 1000px;
+            height: 240px;
+            cursor: pointer;
+        }
+        
+        .flip-card-inner {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            transition: transform 0.5s cubic-bezier(0.4, 0.0, 0.2, 1);
+            transform-style: preserve-3d;
+        }
+        
+        .flip-container.is-flipped .flip-card-inner {
+            transform: rotateY(180deg);
+        }
+        
+        .flip-card-front, .flip-card-back {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+            top: 0; left: 0;
+            border-radius: 0.75rem;
+            overflow: hidden;
+        }
+        
+        .flip-card-front {
+            z-index: 2;
+            transform: rotateY(0deg);
+            border-left-width: 5px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .flip-container .flip-card-front:hover {
+            transform: translateY(-3px) rotateY(0deg);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .flip-card-back {
+            transform: rotateY(180deg);
+            background-color: #ffffff;
+            border: 2px solid #3b82f6;
+            z-index: 1;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; 
+        }
+        
+        /* アイコン選択エリアのスクロール設定 */
+        .icon-scroll {
+            cursor: grab;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .icon-scroll:active { cursor: grabbing; }
+        .icon-scroll::-webkit-scrollbar { height: 2px; }
+        .icon-scroll::-webkit-scrollbar-track { background: transparent; }
+        .icon-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+
+        .toast {
+            visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center;
+            border-radius: 8px; padding: 16px; position: fixed; z-index: 100; left: 50%; bottom: 30px;
+            transform: translateX(-50%); box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+        
+        /* ローディング画面 */
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.9); z-index: 9999;
+        }
+
+        /* Cropper Custom Style */
+        .cropper-container { max-height: 60vh; }
+        .cropper-view-box, .cropper-face { border-radius: 50%; }
+        .cropper-dashed { display: none; }
+    </style>
+</head>
+<body>
+
+    <!-- ローディング画面 -->
+    <div id="loading-overlay" class="flex flex-col justify-center items-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+        <p class="text-slate-600 font-bold">データを同期中...</p>
+    </div>
+
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
+        <div class="container mx-auto px-4 h-16 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="bg-blue-600 text-white p-2 rounded-lg shadow-sm">
+                    <i class="fa-solid fa-graduation-cap text-lg"></i>
+                </div>
+                <h1 class="text-xl font-bold text-slate-800 tracking-tight hidden md:block">近藤研究室 ボード</h1>
+                <h1 class="text-lg font-bold text-slate-800 tracking-tight md:hidden">近藤研究室</h1>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button onclick="window.promptRegisterDevice()" id="my-device-info" class="text-xs text-slate-500 hover:bg-slate-100 px-3 py-1.5 rounded-full border border-transparent hover:border-slate-200 flex items-center transition-colors">
+                    <i class="fa-solid fa-mobile-screen-button mr-1.5"></i>
+                    <span id="my-device-name" class="font-bold truncate max-w-[80px]">未設定</span>
+                </button>
+                <div class="text-xl font-mono font-bold text-slate-700 w-14 text-right" id="current-clock">--:--</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6 max-w-6xl">
+
+        <!-- コントロールバー -->
+        <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+            <div class="flex bg-white p-1 rounded-lg shadow-sm border border-slate-200 w-full md:w-auto overflow-x-auto">
+                <button onclick="window.setFilter('all')" id="filter-all" class="filter-btn px-4 py-2 rounded-md text-sm font-bold text-white bg-blue-600 shadow transition-all whitespace-nowrap">全員</button>
+                <button onclick="window.setFilter('active')" id="filter-active" class="filter-btn px-4 py-2 rounded-md text-sm font-bold text-slate-500 hover:bg-slate-100 transition-all whitespace-nowrap">在室・学内のみ</button>
+                <button onclick="window.setFilter('absent')" id="filter-absent" class="filter-btn px-4 py-2 rounded-md text-sm font-bold text-slate-500 hover:bg-slate-100 transition-all whitespace-nowrap">不在・帰宅</button>
+            </div>
+
+            <div class="flex space-x-2 w-full md:w-auto">
+                <button onclick="window.toggleNfcPanel()" class="flex-1 md:flex-none flex items-center justify-center space-x-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-lg font-bold shadow-sm transition-colors">
+                    <i class="fa-solid fa-wifi rotate-90"></i>
+                    <span class="hidden sm:inline">NFCタグ作成</span>
+                    <span class="sm:hidden">NFC</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 初期セットアップ用ボタン -->
+        <div id="setup-area" class="hidden mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+            <h3 class="text-lg font-bold text-yellow-800 mb-2"><i class="fa-solid fa-database mr-2"></i>データベースが空です</h3>
+            <p class="text-sm text-yellow-700 mb-4">初期メンバーデータを登録して利用を開始しますか？</p>
+            <button id="btn-initialize-db" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-6 rounded shadow">
+                初期データを登録する
+            </button>
+        </div>
+
+        <!-- NFCツールパネル -->
+        <div id="nfc-panel" class="hidden mb-8 animate-fade-in">
+            <div class="bg-indigo-50 rounded-xl shadow-lg border border-indigo-200 overflow-hidden">
+                <div class="bg-indigo-100 px-6 py-3 border-b border-indigo-200 flex justify-between items-center">
+                    <h3 class="font-bold text-indigo-800"><i class="fa-solid fa-wifi rotate-90 mr-2"></i>NFCタグ / QRコード作成ツール</h3>
+                    <button onclick="window.toggleNfcPanel()" class="text-indigo-400 hover:text-indigo-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                </div>
+                <div class="p-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-bold text-indigo-600 mb-1">タグの種類</label>
+                                <div class="flex gap-2">
+                                    <button onclick="window.setNfcMode('shared')" id="btn-mode-shared" class="flex-1 py-2 px-3 rounded border text-sm font-bold bg-indigo-600 text-white border-indigo-600">🏢 場所用 (共有)</button>
+                                    <button onclick="window.setNfcMode('personal')" id="btn-mode-personal" class="flex-1 py-2 px-3 rounded border text-sm font-bold bg-white text-indigo-600 border-indigo-300">👤 個人用 (特定)</button>
+                                </div>
+                            </div>
+                            <div id="nfc-target-wrapper" class="hidden">
+                                <label class="block text-xs font-bold text-indigo-600 mb-1">対象者 (個人用のみ)</label>
+                                <select id="nfc-target-name" class="w-full border border-indigo-200 rounded p-2 text-sm bg-white"></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-indigo-600 mb-1">アクション・場所</label>
+                                <select id="nfc-preset-location" class="w-full border border-indigo-200 rounded p-2 text-sm bg-white">
+                                    <option value="present:407">🏢 407 に到着 (在室)</option>
+                                    <option value="present:教授室">🗣️ 教授室 に到着 (在室)</option>
+                                    <option value="absent:-">🏠 帰宅する (不在)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="bg-indigo-900 bg-opacity-5 rounded-lg p-4 border border-indigo-100 flex flex-col justify-between">
+                            <div>
+                                <label class="block text-xs font-bold text-indigo-800 mb-2">書き込み用URL</label>
+                                <div class="bg-white p-3 rounded border border-indigo-200 break-all font-mono text-xs text-slate-600 mb-3 select-all" id="generated-url">https://...</div>
+                            </div>
+                            <button onclick="window.simulateNfcScan()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded text-sm shadow-md transition-colors"><i class="fa-solid fa-play mr-2"></i> テスト実行</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 端末登録ダイアログ (モーダル) -->
+        <div id="device-register-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-[100] flex justify-center items-center p-4">
+            <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden">
+                <div class="bg-blue-600 px-6 py-4 flex justify-between items-center">
+                    <h3 class="text-white font-bold text-lg"><i class="fa-solid fa-mobile-screen-button mr-2"></i>端末設定</h3>
+                    <button onclick="window.closeRegisterModal()" class="text-blue-200 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+                </div>
+                <div class="p-6">
+                    <p class="text-sm text-slate-600 mb-4">
+                        この端末（スマホ/PC）の持ち主を設定します。<br>
+                        <span class="text-xs text-slate-400">※設定すると、NFCタグを読み取った際に自動であなたが認識されます。</span>
+                    </p>
+                    <label class="block text-xs font-bold text-slate-500 mb-1">あなたの名前</label>
+                    <select id="modal-input-name" class="w-full border border-slate-300 rounded-lg p-2.5 mb-4 focus:ring-2 focus:ring-blue-500 outline-none"></select>
+                    
+                    <button onclick="window.submitRegisterDevice()" class="w-full bg-blue-600 text-white font-bold py-2 rounded-lg shadow hover:bg-blue-700 transition-colors mb-2">
+                        登録する
+                    </button>
+                    <button onclick="window.clearRegisterDevice()" class="w-full bg-white text-red-500 border border-red-200 font-bold py-2 rounded-lg hover:bg-red-50 transition-colors text-sm">
+                        設定を解除する
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 画像トリミングモーダル -->
+        <div id="crop-modal" class="hidden fixed inset-0 bg-black bg-opacity-80 z-[110] flex flex-col justify-center items-center p-4">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+                <div class="bg-slate-800 px-4 py-3 flex justify-between items-center text-white">
+                    <h3 class="font-bold"><i class="fa-solid fa-crop-simple mr-2"></i>画像を切り抜く</h3>
+                    <button onclick="window.closeCropModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+                </div>
+                <div class="flex-1 bg-black relative overflow-hidden min-h-[300px]">
+                    <img id="crop-image" src="" alt="Crop" class="max-w-full block">
+                </div>
+                <div class="p-4 bg-white flex justify-end gap-3">
+                    <button onclick="window.closeCropModal()" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded font-bold">キャンセル</button>
+                    <button onclick="window.saveCroppedImage()" class="px-6 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 shadow">切り抜く</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-4 text-slate-600 text-sm font-medium flex items-center">
+            <span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+            現在、研究室周辺に <span id="count-present" class="font-bold text-slate-900 text-lg mx-1">0</span> 名が活動中です
+        </div>
+
+        <div id="members-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5"></div>
+    </main>
+
+    <div id="toast" class="toast">ステータスを更新しました</div>
+
+    <!-- Firebase SDK & App Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, writeBatch, serverTimestamp } 
+        from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyA2orsNpZqkfn4qor8SfS-AKjfelfov11A",
+            authDomain: "lala-54834.firebaseapp.com",
+            projectId: "lala-54834",
+            storageBucket: "lala-54834.firebasestorage.app",
+            messagingSenderId: "578411123082",
+            appId: "1:578411123082:web:ec6e0637a5865e1aa3f873"
+        };
+
+        let db;
+        let membersData = [];
+        const COL_NAME = "members";
+
+        // 初期化開始
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            console.log("Firebase initialized");
+            
+            // リアルタイム更新開始
+            onSnapshot(collection(db, COL_NAME), (snapshot) => {
+                const members = [];
+                snapshot.forEach((doc) => members.push({ id: parseInt(doc.id), ...doc.data() }));
+
+                if (members.length === 0) {
+                    document.getElementById('setup-area').classList.remove('hidden');
+                } else {
+                    document.getElementById('setup-area').classList.add('hidden');
+                    membersData = members;
+                    renderMembers(); 
+                    if(!window.urlParamsChecked) {
+                        checkUrlParameters();
+                        window.urlParamsChecked = true;
+                    }
+                }
+                document.getElementById('loading-overlay').style.display = 'none';
+            }, (error) => {
+                console.error("Firestore read error:", error);
+                document.getElementById('loading-overlay').style.display = 'none';
+            });
+
+        } catch (e) {
+            console.error("Firebase init failed:", e);
+            document.querySelector("#loading-overlay p").innerHTML = `<span class="text-red-500">設定エラー</span>`;
+        }
+
+        const iconPresets = [
+            "fa-user", "fa-user-graduate", "fa-user-tie", "fa-user-astronaut", "fa-user-ninja", 
+            "fa-cat", "fa-dog", "fa-crow", "fa-dragon", "fa-fish", "fa-hippo", "fa-otter", "fa-spider",
+            "fa-robot", "fa-ghost", "fa-snowman", "fa-mug-hot", "fa-bicycle", "fa-car", "fa-plane",
+            "fa-music", "fa-gamepad", "fa-futbol", "fa-book", "fa-microscope", "fa-glasses"
+        ];
+
+        const statusConfig = {
+            present:    { label: "在室", icon: "fa-laptop", cssClass: "status-present-bg", btnColor: "bg-green-100 text-green-700 hover:bg-green-200" },
+            experiment: { label: "実験", icon: "fa-flask", cssClass: "status-experiment-bg", btnColor: "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" },
+            class:      { label: "授業", icon: "fa-book-open", cssClass: "status-class-bg", btnColor: "bg-blue-100 text-blue-700 hover:bg-blue-200" },
+            meeting:    { label: "会議", icon: "fa-users", cssClass: "status-meeting-bg", btnColor: "bg-purple-100 text-purple-700 hover:bg-purple-200" },
+            break:      { label: "休憩", icon: "fa-mug-hot", cssClass: "status-experiment-bg", btnColor: "bg-orange-100 text-orange-700 hover:bg-orange-200" },
+            absent:     { label: "帰宅", icon: "fa-house", cssClass: "status-absent-bg", btnColor: "bg-slate-100 text-slate-600 hover:bg-slate-200" }
+        };
+
+        const defaultMembers = [
+            { id: 1, name: "近藤 教授", role: "Professor", status: "absent", location: "-", icon: "fa-user-tie" },
+            { id: 2, name: "宮下 准教授", role: "Assoc. Prof", status: "absent", location: "-", icon: "fa-user-graduate" },
+            { id: 3, name: "佐藤 (M2)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 4, name: "高羽 (M2)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 5, name: "野村 (M2)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 6, name: "森田 (M2)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 7, name: "横山 (M2)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 8, name: "西 (M1)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 9, name: "東野 (M1)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 11, name: "山下 (M1)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 12, name: "小柳 (M1)", role: "Master", status: "absent", location: "-", icon: "fa-user" },
+            { id: 13, name: "榎本 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+            { id: 14, name: "堺 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+            { id: 15, name: "高橋 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+            { id: 16, name: "原 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+            { id: 17, name: "山本 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+            { id: 18, name: "吉田 (B4)", role: "Bachelor", status: "absent", location: "-", icon: "fa-user" },
+        ];
+
+        let currentFilter = 'all';
+        let nfcMode = 'shared';
+        let activeCardId = null;
+        let cropper;
+        let currentEditMemberId = null;
+
+        // --- Firestore Action Functions (Global) ---
+        
+        window.updateMemberFirestore = async (id, status, location, icon = null) => {
+            if (!db) return;
+            try {
+                const now = getCurrentTime();
+                const memberRef = doc(db, COL_NAME, id.toString());
+                const data = { status, location, time: now, updatedAt: serverTimestamp() };
+                if(icon) data.icon = icon;
+                
+                await updateDoc(memberRef, data);
+                showToast(`更新しました`);
+                return true;
+            } catch (e) {
+                alert("更新失敗: " + e.message); return false;
+            }
+        }
+
+        window.initializeDB = async () => {
+            if (!db || !confirm("初期データを登録しますか？")) return;
+            try {
+                const batch = writeBatch(db);
+                defaultMembers.forEach(m => batch.set(doc(db, COL_NAME, m.id.toString()), { ...m, time: getCurrentTime() }));
+                await batch.commit();
+                alert("初期化完了！");
+            } catch (e) { alert("エラー: " + e.message); }
+        }
+        document.getElementById('btn-initialize-db').addEventListener('click', window.initializeDB);
+
+        // --- UI Logic ---
+        function getCurrentTime() {
+            const now = new Date();
+            return now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+        }
+
+        function showToast(message) {
+            const x = document.getElementById("toast");
+            x.textContent = message;
+            x.className = "toast show";
+            setTimeout(() => x.className = x.className.replace("show", ""), 3000);
+        }
+
+        function enableDragScroll(el) {
+            let isDown = false, startX, scrollLeft;
+            el.addEventListener('mousedown', (e) => { isDown = true; startX = e.pageX - el.offsetLeft; scrollLeft = el.scrollLeft; e.stopPropagation(); });
+            el.addEventListener('mouseleave', () => isDown = false);
+            el.addEventListener('mouseup', (e) => { isDown = false; e.stopPropagation(); });
+            el.addEventListener('mousemove', (e) => {
+                if (!isDown) return;
+                e.preventDefault(); e.stopPropagation();
+                const x = e.pageX - el.offsetLeft;
+                el.scrollLeft = scrollLeft - (x - startX) * 2;
+            });
+            el.addEventListener('touchstart', (e) => e.stopPropagation(), {passive: true});
+            el.addEventListener('touchmove', (e) => e.stopPropagation(), {passive: true});
+        }
+
+        function resizeImage(file, maxWidth, callback) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width, height = img.height;
+                    if (width > height) { if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; } }
+                    else { if (height > maxWidth) { width *= maxWidth / height; height = maxWidth; } }
+                    canvas.width = width; canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    callback(canvas.toDataURL('image/jpeg', 0.7));
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderMembers() {
+            const grid = document.getElementById('members-grid');
+            const nfcSelect = document.getElementById('nfc-target-name');
+            const modalSelect = document.getElementById('modal-input-name');
+            const myId = parseInt(localStorage.getItem('labApp_myId'));
+            let myName = "未設定";
+
+            grid.innerHTML = '';
+            nfcSelect.innerHTML = ''; 
+            modalSelect.innerHTML = '<option value="" disabled selected>名前を選択...</option>';
+
+            let activeCount = 0;
+            const sortedMembers = [...membersData].sort((a, b) => {
+                const aAct = a.status !== 'absent', bAct = b.status !== 'absent';
+                return aAct === bAct ? a.id - b.id : bAct - aAct;
+            });
+
+            sortedMembers.forEach(member => {
+                const opt1 = document.createElement('option'); opt1.value = member.id; opt1.textContent = member.name;
+                nfcSelect.appendChild(opt1);
+                const opt2 = document.createElement('option'); opt2.value = member.id; opt2.textContent = member.name;
+                modalSelect.appendChild(opt2);
+
+                if (member.id === myId) myName = member.name;
+
+                const isAbsent = member.status === 'absent';
+                if (!((currentFilter === 'active' && isAbsent) || (currentFilter === 'absent' && !isAbsent))) {
+                    if (!isAbsent) activeCount++;
+                    const config = statusConfig[member.status] || statusConfig['absent'];
+                    const isMe = member.id === myId;
+                    
+                    const rawIcon = member.icon || "fa-user";
+                    const isImage = rawIcon.startsWith("data:image");
+                    const iconHtml = isImage 
+                        ? `<img src="${rawIcon}" class="w-full h-full object-cover rounded-full" alt="icon">`
+                        : `<i class="fa-solid ${rawIcon}"></i>`;
+
+                    const container = document.createElement('div');
+                    container.className = `flip-container ${isMe ? 'is-me' : ''}`;
+                    container.id = `card-${member.id}`;
+                    container.setAttribute('onclick', `window.handleCardClick(${member.id})`);
+
+                    const badge = isMe ? `<span class="absolute top-2 right-2 bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold z-10">YOU</span>` : '';
+
+                    let backContent = `
+                        <div class="h-full flex flex-col p-3 relative">
+                            <div class="flex justify-between items-center mb-1">
+                                <h4 class="text-xs font-bold text-slate-400">ステータス更新</h4>
+                                <button onclick="event.stopPropagation(); window.flipCard(${member.id}, false)" class="text-slate-400 hover:text-slate-600 p-1"><i class="fa-solid fa-xmark text-lg"></i></button>
+                            </div>
+                            
+                            <div class="mb-2">
+                                <div class="grid grid-cols-3 gap-1">
+                                    ${Object.keys(statusConfig).map(key => `
+                                        <button onclick="event.stopPropagation(); window.selectStatus(${member.id}, '${key}')" class="py-1 rounded ${statusConfig[key].btnColor} text-[10px] font-bold transition-colors truncate">
+                                            ${statusConfig[key].label}
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            </div>
+                            
+                            <div class="mb-2">
+                                <div class="flex justify-between items-center mb-1">
+                                    <span class="text-[10px] font-bold text-slate-300">ICON</span>
+                                    <label class="cursor-pointer bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded text-[10px] text-slate-500 flex items-center border border-slate-100 transition-colors" onclick="event.stopPropagation()">
+                                        <i class="fa-solid fa-camera mr-1"></i> 変更
+                                        <input type="file" class="hidden" accept="image/*" onchange="window.handleImageSelect(event, ${member.id})">
+                                    </label>
+                                </div>
+                                <div class="icon-scroll flex gap-1.5 overflow-x-auto pb-1" onclick="event.stopPropagation()">
+                                    ${iconPresets.map(icon => `
+                                        <button onclick="window.selectIcon(${member.id}, '${icon}', this)" 
+                                            class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 border ${rawIcon === icon ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-slate-100'} transition-all">
+                                            <i class="fa-solid ${icon} text-xs"></i>
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            </div>
+
+                            <div class="mt-auto w-full flex items-center gap-2">
+                                <input type="text" id="loc-input-${member.id}" placeholder="場所メモ" class="flex-1 min-w-0 border border-slate-200 rounded px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-blue-200 bg-slate-50" value="${member.location !== '-' ? member.location : ''}" onclick="event.stopPropagation()">
+                                <button onclick="event.stopPropagation(); window.submitUpdate(${member.id})" class="bg-blue-600 text-white w-8 h-8 flex items-center justify-center rounded shadow-sm hover:bg-blue-700 transition-colors flex-shrink-0">
+                                    <i class="fa-solid fa-paper-plane text-xs"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+
+                    container.innerHTML = `
+                        <div class="flip-card-inner">
+                            <div class="flip-card-front ${config.cssClass} p-4">
+                                <div class="relative h-full flex flex-col">
+                                    ${badge}
+                                    <div class="flex items-start space-x-3 mb-2">
+                                        <div class="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center bg-white bg-opacity-60 shadow-sm text-2xl text-slate-600 overflow-hidden">
+                                            ${iconHtml}
+                                        </div>
+                                        <div class="flex-1 min-w-0 pt-1">
+                                            <span class="text-[10px] font-bold uppercase tracking-wider opacity-60 block leading-none mb-1">${member.role}</span>
+                                            <h3 class="text-lg font-bold text-slate-800 leading-tight truncate">${member.name}</h3>
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-col gap-1.5 mt-1">
+                                        <div class="flex items-center justify-between bg-white bg-opacity-60 rounded px-3 py-1 shadow-sm"><span class="text-[10px] font-bold opacity-60">状態</span><span class="text-sm font-bold flex items-center">${config.label}</span></div>
+                                        <div class="flex items-center justify-between bg-white bg-opacity-60 rounded px-3 py-1 shadow-sm"><span class="text-[10px] font-bold opacity-60">場所</span><span class="text-sm font-medium truncate max-w-[100px] text-right">${member.location || '-'}</span></div>
+                                    </div>
+                                    <div class="mt-auto text-right"><span class="text-[10px] opacity-60 font-mono bg-white bg-opacity-40 px-1.5 py-0.5 rounded">${member.time}</span></div>
+                                </div>
+                            </div>
+                            <div class="flip-card-back">${backContent}</div>
+                        </div>
+                    `;
+                    grid.appendChild(container);
+                    
+                    const iconScrollDiv = container.querySelector('.icon-scroll');
+                    if(iconScrollDiv) enableDragScroll(iconScrollDiv);
+                }
+            });
+
+            document.getElementById('count-present').textContent = activeCount;
+            
+            const devInfo = document.getElementById('my-device-info');
+            const devName = document.getElementById('my-device-name');
+            if (myId) {
+                devInfo.classList.remove('text-slate-500', 'hover:bg-slate-100');
+                devInfo.classList.add('text-blue-600', 'bg-blue-50', 'border-blue-100');
+                devName.textContent = myName.split(" ")[0];
+            } else {
+                devInfo.classList.add('text-slate-500', 'hover:bg-slate-100');
+                devInfo.classList.remove('text-blue-600', 'bg-blue-50', 'border-blue-100');
+                devName.textContent = "未設定";
+            }
+        }
+
+        // --- Card Interaction ---
+        window.handleCardClick = (id) => { window.flipCard(id, true); };
+
+        window.flipCard = (id, isFlipped) => {
+            if (isFlipped && activeCardId && activeCardId !== id) {
+                document.getElementById(`card-${activeCardId}`)?.classList.remove('is-flipped');
+            }
+            const card = document.getElementById(`card-${id}`);
+            if (card) {
+                isFlipped ? card.classList.add('is-flipped') : card.classList.remove('is-flipped');
+                activeCardId = isFlipped ? id : null;
+            }
+        };
+
+        window.selectStatus = (id, statusKey) => {
+            let loc = document.getElementById(`loc-input-${id}`).value;
+            if (statusKey === 'absent') {
+                loc = "-";
+            } else if (!loc || loc === '-' || loc === '研究室' || loc === '実験室' || loc === '講義棟' || loc === '学内') {
+                if (statusKey === 'present') loc = "研究室";
+                else if (statusKey === 'experiment') loc = "実験室";
+                else if (statusKey === 'class') loc = "講義棟";
+                else loc = "学内";
+            }
+            document.getElementById(`loc-input-${id}`).value = loc;
+            window.updateMemberFirestore(id, statusKey, loc).then(success => {
+                if(success) window.flipCard(id, false);
+            });
+        };
+
+        window.selectIcon = (id, iconClass, btnElement) => {
+            const parent = btnElement.parentNode;
+            Array.from(parent.children).forEach(c => {
+                c.className = "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 border border-slate-100 transition-all";
+            });
+            btnElement.className = "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-blue-600 bg-blue-50 border border-blue-500 transition-all";
+            document.getElementById(`loc-input-${id}`).dataset.selectedIcon = iconClass;
+        };
+
+        // --- Image Upload & Crop Logic ---
+        window.handleImageSelect = (event, id) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            currentEditMemberId = id;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const imageElement = document.getElementById('crop-image');
+                imageElement.src = e.target.result;
+                document.getElementById('crop-modal').classList.remove('hidden');
+                
+                if(cropper) cropper.destroy();
+                cropper = new Cropper(imageElement, {
+                    aspectRatio: 1,
+                    viewMode: 1,
+                    autoCropArea: 1,
+                });
+            };
+            reader.readAsDataURL(file);
+            event.target.value = '';
+        };
+
+        window.saveCroppedImage = () => {
+            if(!cropper || !currentEditMemberId) return;
+            const canvas = cropper.getCroppedCanvas({ width: 128, height: 128, imageSmoothingQuality: 'high' });
+            const base64Data = canvas.toDataURL('image/jpeg', 0.8);
+            
+            const input = document.getElementById(`loc-input-${currentEditMemberId}`);
+            if(input) {
+                input.dataset.selectedIcon = base64Data;
+                const container = input.closest('.flip-card-back');
+                const iconButtons = container.querySelectorAll('.icon-scroll button');
+                iconButtons.forEach(btn => btn.className = "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 border border-slate-100 transition-all");
+                showToast("画像を切り抜きました（更新ボタンで保存）");
+            }
+            window.closeCropModal();
+        };
+
+        window.closeCropModal = () => {
+            document.getElementById('crop-modal').classList.add('hidden');
+            if(cropper) { cropper.destroy(); cropper = null; }
+        };
+
+        window.submitUpdate = (id) => {
+            const member = membersData.find(m => m.id === id);
+            const loc = document.getElementById(`loc-input-${id}`).value;
+            const newIcon = document.getElementById(`loc-input-${id}`).dataset.selectedIcon || member.icon;
+            window.updateMemberFirestore(id, member.status, loc, newIcon).then(success => {
+                if(success) window.flipCard(id, false);
+            });
+        };
+
+        // --- Device Registration Modal ---
+        window.promptRegisterDevice = () => {
+            const modal = document.getElementById('device-register-modal');
+            const myId = parseInt(localStorage.getItem('labApp_myId'));
+            if(myId) document.getElementById('modal-input-name').value = myId;
+            modal.classList.remove('hidden');
+        };
+        window.closeRegisterModal = () => { document.getElementById('device-register-modal').classList.add('hidden'); };
+        window.submitRegisterDevice = () => {
+            const id = document.getElementById('modal-input-name').value;
+            if(!id) return alert("名前を選択してください");
+            localStorage.setItem('labApp_myId', id);
+            alert("登録しました！");
+            window.closeRegisterModal();
+            renderMembers();
+        };
+        window.clearRegisterDevice = () => {
+            if(confirm("設定を解除しますか？")) {
+                localStorage.removeItem('labApp_myId');
+                window.closeRegisterModal();
+                renderMembers();
+            }
+        };
+
+        // --- NFC / Others ---
+        window.toggleNfcPanel = () => { document.getElementById('nfc-panel').classList.toggle('hidden'); window.updateNfcUrl(); };
+        window.setFilter = (filterType) => {
+            currentFilter = filterType;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow');
+                btn.classList.add('text-slate-500', 'hover:bg-slate-100');
+            });
+            document.getElementById('filter-' + filterType).classList.remove('text-slate-500', 'hover:bg-slate-100');
+            document.getElementById('filter-' + filterType).classList.add('bg-blue-600', 'text-white', 'shadow');
+            renderMembers();
+        };
+        window.setNfcMode = (mode) => {
+            nfcMode = mode;
+            document.getElementById('nfc-target-wrapper').classList.toggle('hidden', mode === 'shared');
+            document.getElementById('btn-mode-shared').className = mode==='shared' ? "flex-1 py-2 px-3 rounded border text-sm font-bold bg-indigo-600 text-white border-indigo-600" : "flex-1 py-2 px-3 rounded border text-sm font-bold bg-white text-indigo-600 border-indigo-300";
+            document.getElementById('btn-mode-personal').className = mode==='personal' ? "flex-1 py-2 px-3 rounded border text-sm font-bold bg-indigo-600 text-white border-indigo-600" : "flex-1 py-2 px-3 rounded border text-sm font-bold bg-white text-indigo-600 border-indigo-300";
+            window.updateNfcUrl();
+        };
+        window.updateNfcUrl = () => {
+            const memberId = document.getElementById('nfc-target-name').value;
+            const preset = document.getElementById('nfc-preset-location').value || "";
+            const [status, location] = preset.split(':');
+            const baseUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+            let params = `?status=${status}&loc=${encodeURIComponent(location || "")}`;
+            if (nfcMode === 'personal' && memberId) params += `&nfc_id=${memberId}`;
+            document.getElementById('generated-url').textContent = baseUrl + params;
+        };
+        document.getElementById('nfc-target-name').addEventListener('change', window.updateNfcUrl);
+        document.getElementById('nfc-preset-location').addEventListener('change', window.updateNfcUrl);
+        window.simulateNfcScan = () => {
+            const urlText = document.getElementById('generated-url').textContent;
+            try { const url = new URL(urlText); checkUrlParameters(new URLSearchParams(url.search)); } catch(e) { console.error(e); }
+        };
+        async function checkUrlParameters(params = null) {
+            const searchParams = params || new URLSearchParams(window.location.search);
+            if (!searchParams.has('status') || !searchParams.has('loc')) return;
+            const status = searchParams.get('status');
+            const loc = searchParams.get('loc');
+            let targetId = null;
+            if (searchParams.has('nfc_id')) targetId = parseInt(searchParams.get('nfc_id'));
+            else {
+                targetId = parseInt(localStorage.getItem('labApp_myId'));
+                if (!targetId && !params) { alert("【共有タグ検知】\nまだ端末設定がされていません。"); return; }
+            }
+            if (targetId) {
+                await updateMemberFirestore(targetId, status, loc);
+                if (!params) {
+                    const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+                    window.history.replaceState({path: newUrl}, '', newUrl);
+                }
+            }
+        }
+
+        setInterval(() => { document.getElementById('current-clock').textContent = getCurrentTime(); }, 1000);
+        document.getElementById('current-clock').textContent = getCurrentTime();
+        setTimeout(() => window.updateNfcUrl(), 1000);
+    </script>
+</body>
+</html>
